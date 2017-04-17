@@ -25,6 +25,8 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <time.h>
+#include <sys/time.h>
 #include "controller.h"
 
 #include "bt.h"
@@ -52,6 +54,7 @@
 #include "lwip/sys.h"
 #include "lwip/netdb.h"
 #include "lwip/dns.h"
+#include "apps/sntp/sntp.h"
 
 #define BT_BD_ADDR_STR         "%02x:%02x:%02x:%02x:%02x:%02x"
 #define BT_BD_ADDR_HEX(addr)   addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
@@ -157,6 +160,14 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
         break;
     }
     return ESP_OK;
+}
+
+static void initialize_sntp(void)
+{
+    ESP_LOGI(TAG, "Initializing SNTP");
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "pool.ntp.org");
+    sntp_init();
 }
 
 static void initialise_wifi(void)
@@ -693,6 +704,33 @@ void app_main()
 
     ESP_ERROR_CHECK( nvs_flash_init() );
     initialise_wifi();
+    xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
+                        false, true, portMAX_DELAY);
+    initialize_sntp();
+    // wait for time to be set
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    // Is time set? If not, tm_year will be (1970 - 1900).
+    int retry = 0;
+    const int retry_count = 10;
+    while(timeinfo.tm_year < (2017 - 1900) && ++retry < retry_count) {
+        ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
+        time(&now);
+        localtime_r(&now, &timeinfo);
+    }
+    char strftime_buf[64];
+    
+    // Set timezone to China Standard Time
+    setenv("TZ", "GMT-8", 1);
+    tzset();
+    localtime_r(&now, &timeinfo);
+    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+    ESP_LOGI(TAG, "The current date/time in Shanghai is: %s", strftime_buf);
+
+
     esp_bt_controller_init();
     esp_bt_controller_enable(ESP_BT_MODE_BTDM);
     
