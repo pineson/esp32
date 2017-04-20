@@ -13,8 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
-
 /****************************************************************************
 *
 * This file is for gatt client. It can scan ble device, connect one device,
@@ -56,8 +54,8 @@
 #include "lwip/dns.h"
 #include "apps/sntp/sntp.h"
 
-#define BT_BD_ADDR_STR         "%02x:%02x:%02x:%02x:%02x:%02x"
-#define BT_BD_ADDR_HEX(addr)   addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
+#define BT_BD_ADDR_STR "%02x:%02x:%02x:%02x:%02x:%02x"
+#define BT_BD_ADDR_HEX(addr) addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
 /* The examples use simple WiFi configuration that you can set via
    'make menuconfig'.
 
@@ -75,26 +73,28 @@ static esp_gatt_if_t client_if;
 static uint16_t client_conn = 0;
 esp_gatt_status_t status = ESP_GATT_ERROR;
 bool connet = false;
-bool written = false;
+int written = 0;
+bool notify_flag = false;
 uint16_t simpleClient_id = 0xEE;
-char * get_request;
+char *get_request;
 const char device_name[] = "TEMP 12";
-
+struct tm timeinfo;
 static esp_bd_addr_t server_dba;
 
 static esp_ble_scan_params_t ble_scan_params = {
-    .scan_type              = BLE_SCAN_TYPE_ACTIVE,
-    .own_addr_type          = ESP_PUBLIC_ADDR,
-    .scan_filter_policy     = BLE_SCAN_FILTER_ALLOW_ALL,
-    .scan_interval          = 0x50,
-    .scan_window            = 0x30
-};
+    .scan_type = BLE_SCAN_TYPE_ACTIVE,
+    .own_addr_type = ESP_PUBLIC_ADDR,
+    .scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL,
+    .scan_interval = 0x50,
+    .scan_window = 0x30};
 
 static esp_gatt_srvc_id_t nrf51_service_id = {
     .id = {
         .uuid = {
             .len = ESP_UUID_LEN_128,
-            .uuid = {.uuid128 = {0xa5, 0xa5, 0x00, 0x5b, 0x02, 0x00, 0x23, 0x9b, 0xe1, 0x11, 0x02, 0xd1, 0x00, 0x1c, 0x00, 0x00},},
+            .uuid = {
+                .uuid128 = {0xa5, 0xa5, 0x00, 0x5b, 0x02, 0x00, 0x23, 0x9b, 0xe1, 0x11, 0x02, 0xd1, 0x00, 0x1c, 0x00, 0x00},
+            },
         },
         .inst_id = 0,
     },
@@ -104,12 +104,12 @@ static esp_gatt_srvc_id_t nrf51_service_id = {
 static esp_gatt_id_t nrf51_char_id = {
     .uuid = {
         .len = ESP_UUID_LEN_128,
-        .uuid = {.uuid128 = {0xa5, 0xa5, 0x00, 0x5b, 0x02, 0x00, 0x23, 0x9b, 0xe1, 0x11, 0x02, 0xd1, 0x01, 0x1c, 0x00, 0x00},},
+        .uuid = {
+            .uuid128 = {0xa5, 0xa5, 0x00, 0x5b, 0x02, 0x00, 0x23, 0x9b, 0xe1, 0x11, 0x02, 0xd1, 0x01, 0x1c, 0x00, 0x00},
+        },
     },
     .inst_id = 0,
 };
-
-
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
 static EventGroupHandle_t wifi_event_group;
@@ -119,23 +119,19 @@ static EventGroupHandle_t wifi_event_group;
    to the AP with an IP? */
 const int CONNECTED_BIT = BIT0;
 
-
-
 //static const char *TAG = "example";
 
 static const char *REQUEST = "GET " WEB_URL " HTTP/1.1\n"
-    "Host: "WEB_SERVER"\n"
-    "User-Agent: esp-idf/1.0 esp32\n"
-    "\n";
-static const char* get_request_start = "GET /esp32.php?subject=C&web=esp32.com&rawdata=";
-static const char* get_request_end =
+                             "Host: " WEB_SERVER "\n"
+                             "User-Agent: esp-idf/1.0 esp32\n"
+                             "\n";
+static const char *get_request_start = "GET /esp32.php?subject=C&web=esp32.com&rawdata=";
+static const char *get_request_end =
     " HTTP/1.1\n"
-    "Host: "WEB_SERVER"\n"
+    "Host: " WEB_SERVER "\n"
     "Connection: close\n"
     "User-Agent: esp32 / esp-idf\n"
     "\n";
-
-
 
 static void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
 
@@ -143,7 +139,8 @@ static void esp_gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp
 
 static esp_err_t event_handler(void *ctx, system_event_t *event)
 {
-    switch(event->event_id) {
+    switch (event->event_id)
+    {
     case SYSTEM_EVENT_STA_START:
         esp_wifi_connect();
         break;
@@ -174,10 +171,10 @@ static void initialise_wifi(void)
 {
     tcpip_adapter_init();
     wifi_event_group = xEventGroupCreate();
-    ESP_ERROR_CHECK( esp_event_loop_init(event_handler, NULL) );
+    ESP_ERROR_CHECK(esp_event_loop_init(event_handler, NULL));
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
-    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     wifi_config_t wifi_config = {
         .sta = {
             .ssid = EXAMPLE_WIFI_SSID,
@@ -185,9 +182,9 @@ static void initialise_wifi(void)
         },
     };
     ESP_LOGI(TAG, "Setting WiFi configuration SSID %s...", wifi_config.sta.ssid);
-    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
-    ESP_ERROR_CHECK( esp_wifi_start() );
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
 }
 
 static void http_get_task(void *pvParameters)
@@ -201,7 +198,8 @@ static void http_get_task(void *pvParameters)
     int s, r;
     char recv_buf[64];
 
-    while(1) {
+    while (1)
+    {
         /* Wait for the callback to set the CONNECTED_BIT in the
            event group.
         */
@@ -211,7 +209,8 @@ static void http_get_task(void *pvParameters)
 
         int err = getaddrinfo(WEB_SERVER, "80", &hints, &res);
 
-        if(err != 0 || res == NULL) {
+        if (err != 0 || res == NULL)
+        {
             ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
             vTaskDelay(1000 / portTICK_PERIOD_MS);
             continue;
@@ -224,7 +223,8 @@ static void http_get_task(void *pvParameters)
         ESP_LOGI(TAG, "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
 
         s = socket(res->ai_family, res->ai_socktype, 0);
-        if(s < 0) {
+        if (s < 0)
+        {
             ESP_LOGE(TAG, "... Failed to allocate socket.");
             freeaddrinfo(res);
             vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -232,7 +232,8 @@ static void http_get_task(void *pvParameters)
         }
         ESP_LOGI(TAG, "... allocated socket\r\n");
 
-        if(connect(s, res->ai_addr, res->ai_addrlen) != 0) {
+        if (connect(s, res->ai_addr, res->ai_addrlen) != 0)
+        {
             ESP_LOGE(TAG, "... socket connect failed errno=%d", errno);
             close(s);
             freeaddrinfo(res);
@@ -243,7 +244,8 @@ static void http_get_task(void *pvParameters)
         ESP_LOGI(TAG, "... connected");
         freeaddrinfo(res);
 
-        if (write(s, get_request, strlen(get_request)) < 0) {
+        if (write(s, get_request, strlen(get_request)) < 0)
+        {
             ESP_LOGE(TAG, "... socket send failed");
             close(s);
             vTaskDelay(4000 / portTICK_PERIOD_MS);
@@ -252,22 +254,25 @@ static void http_get_task(void *pvParameters)
         ESP_LOGI(TAG, "... socket send success");
 
         /* Read HTTP response */
-        do {
+        do
+        {
             bzero(recv_buf, sizeof(recv_buf));
-            r = read(s, recv_buf, sizeof(recv_buf)-1);
-            for(int i = 0; i < r; i++) {
+            r = read(s, recv_buf, sizeof(recv_buf) - 1);
+            for (int i = 0; i < r; i++)
+            {
                 putchar(recv_buf[i]);
             }
-        } while(r > 0);
+        } while (r > 0);
 
         ESP_LOGI(TAG, "... done reading from socket. Last read return=%d errno=%d\r\n", r, errno);
         close(s);
-        for(int countdown = 100; countdown >= 0; countdown--) {
+        for (int countdown = 100; countdown >= 0; countdown--)
+        {
             ESP_LOGI(TAG, "%d... ", countdown);
             vTaskDelay(1000 / portTICK_PERIOD_MS);
         }
         free(get_request);
-        
+
         ESP_LOGI(TAG, "Starting again!");
     }
 }
@@ -276,35 +281,44 @@ static void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
 {
     uint8_t *adv_name = NULL;
     uint8_t adv_name_len = 0;
-    switch (event) {
-    case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT: {
+    switch (event)
+    {
+    case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
+    {
         //the unit of the duration is second
         uint32_t duration = 10;
         esp_ble_gap_start_scanning(duration);
         break;
     }
-    case ESP_GAP_BLE_SCAN_RESULT_EVT: {
+    case ESP_GAP_BLE_SCAN_RESULT_EVT:
+    {
         esp_ble_gap_cb_param_t *scan_result = (esp_ble_gap_cb_param_t *)param;
-        switch (scan_result->scan_rst.search_evt) {
+        switch (scan_result->scan_rst.search_evt)
+        {
         case ESP_GAP_SEARCH_INQ_RES_EVT:
-            LOG_INFO("BDA %x,%x,%x,%x,%x,%x:",scan_result->scan_rst.bda[0],
-            		scan_result->scan_rst.bda[1],scan_result->scan_rst.bda[2],
-					scan_result->scan_rst.bda[3],scan_result->scan_rst.bda[4],
-					scan_result->scan_rst.bda[5]);
-            for (int i = 0; i < 6; i++) {
-                server_dba[i]=scan_result->scan_rst.bda[i];
+            LOG_INFO("BDA %x,%x,%x,%x,%x,%x:", scan_result->scan_rst.bda[0],
+                     scan_result->scan_rst.bda[1], scan_result->scan_rst.bda[2],
+                     scan_result->scan_rst.bda[3], scan_result->scan_rst.bda[4],
+                     scan_result->scan_rst.bda[5]);
+            for (int i = 0; i < 6; i++)
+            {
+                server_dba[i] = scan_result->scan_rst.bda[i];
             }
             adv_name = esp_ble_resolve_adv_data(scan_result->scan_rst.ble_adv,
                                                 ESP_BLE_AD_TYPE_NAME_CMPL, &adv_name_len);
             LOG_INFO("adv_name_len=%x\n", adv_name_len);
-            for (int j = 0; j < adv_name_len; j++) {
-                LOG_INFO("a%d %x %c = d%d %x %c",j, adv_name[j], adv_name[j],j, device_name[j], device_name[j]);
+            for (int j = 0; j < adv_name_len; j++)
+            {
+                LOG_INFO("a%d %x %c = d%d %x %c", j, adv_name[j], adv_name[j], j, device_name[j], device_name[j]);
             }
 
-            if (adv_name != NULL) {
-                if (strncmp((char *)adv_name, device_name,adv_name_len) == 0) {
-                    LOG_INFO("the name eque to %s.",device_name);
-                    if (status ==  ESP_GATT_OK && connet == false) {
+            if (adv_name != NULL)
+            {
+                if (strncmp((char *)adv_name, device_name, adv_name_len) == 0)
+                {
+                    LOG_INFO("the name eque to %s.", device_name);
+                    if (status == ESP_GATT_OK && connet == false)
+                    {
                         connet = true;
                         LOG_INFO("Connet to the remote device.");
                         esp_ble_gap_stop_scanning();
@@ -325,18 +339,18 @@ static void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
     }
 }
 
-
 static void esp_gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param)
 {
     uint16_t conn_id = 0;
     esp_ble_gattc_cb_param_t *p_data = (esp_ble_gattc_cb_param_t *)param;
 
     LOG_INFO("esp_gattc_cb, event = %x", event);
-    switch (event) {
+    switch (event)
+    {
     case ESP_GATTC_REG_EVT:
         status = p_data->reg.status;
-        
-        client_if= gattc_if;
+
+        client_if = gattc_if;
         LOG_INFO("ESP_GATTC_REG_EVT status = %x, client_if = %x", status, gattc_if);
         break;
     case ESP_GATTC_OPEN_EVT:
@@ -345,320 +359,504 @@ static void esp_gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp
         LOG_INFO("ESP_GATTC_OPEN_EVT conn_id %d, if %d, status %d", conn_id, gattc_if, p_data->open.status);
         esp_ble_gattc_search_service(gattc_if, conn_id, NULL);
         break;
-    case ESP_GATTC_READ_CHAR_EVT: {
+    case ESP_GATTC_READ_CHAR_EVT:
+    {
         esp_gatt_srvc_id_t *srvc_id = &p_data->read.srvc_id;
         esp_gatt_id_t *char_id = &p_data->read.char_id;
         conn_id = p_data->read.conn_id;
-        LOG_INFO("READ CHAR: open.conn_id = %x search_res.conn_id = %x  read.conn_id = %x", conn_id,p_data->search_res.conn_id,p_data->read.conn_id);
+        uint8_t value[] = {0x01, 0x0a, 0xaa, 0xbb, 0xcc, 0xdd};
+        LOG_INFO("READ CHAR: open.conn_id = %x search_res.conn_id = %x  read.conn_id = %x", conn_id, p_data->search_res.conn_id, p_data->read.conn_id);
         LOG_INFO("READ CHAR: read.status = %x inst_id = %x value_len = %x", p_data->read.status, char_id->inst_id, p_data->read.value_len);
-        if (p_data->read.status==0) {
-			if (char_id->uuid.len == ESP_UUID_LEN_16) {
-				LOG_INFO("Char UUID16: %x", char_id->uuid.uuid.uuid16);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_32) {
-				LOG_INFO("Char UUID32: %x", char_id->uuid.uuid.uuid32);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_128) {
-				LOG_INFO("Char UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
-						 char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
-						 char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
-						 char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
-						 char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
-						 char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
-			} else {
-				LOG_ERROR("Char UNKNOWN LEN %d\n", char_id->uuid.len);
-			}
-            for (int i = 0; i < p_data->read.value_len; i++) {
+        if (p_data->read.status == 0)
+        {
+            if (char_id->uuid.len == ESP_UUID_LEN_16)
+            {
+                LOG_INFO("Char UUID16: %x", char_id->uuid.uuid.uuid16);
+            }
+            else if (char_id->uuid.len == ESP_UUID_LEN_32)
+            {
+                LOG_INFO("Char UUID32: %x", char_id->uuid.uuid.uuid32);
+            }
+            else if (char_id->uuid.len == ESP_UUID_LEN_128)
+            {
+                LOG_INFO("Char UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
+                         char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
+                         char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
+                         char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
+                         char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
+                         char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
+            }
+            else
+            {
+                LOG_ERROR("Char UNKNOWN LEN %d\n", char_id->uuid.len);
+            }
+            for (int i = 0; i < p_data->read.value_len; i++)
+            {
                 LOG_INFO("%x:", p_data->read.value[i]);
             }
-            esp_ble_gattc_register_for_notify(gattc_if,server_dba,srvc_id,char_id);
+            //esp_ble_gattc_register_for_notify(gattc_if,server_dba,srvc_id,char_id);
+            written++;
+            esp_ble_gattc_write_char(client_if, client_conn, &nrf51_service_id, &nrf51_char_id, sizeof(value), value, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
         }
         break;
     }
-    case ESP_GATTC_WRITE_CHAR_EVT: {
-        uint8_t value[]={0x01,0x06};
-        
-        uint16_t notify_en = 0x0106;
+    case ESP_GATTC_WRITE_CHAR_EVT:
+    {
+        //uint8_t value[] = {0x01, 0x06};
+
+        //uint16_t notify_en = 0x0106;
         esp_gatt_srvc_id_t *srvc_id = &p_data->write.srvc_id;
         esp_gatt_id_t *char_id = &p_data->write.char_id;
         esp_gatt_id_t *descr_id = &p_data->write.descr_id;
         conn_id = p_data->open.conn_id;
-        LOG_INFO("WRITE CHAR: open.conn_id = %x search_res.conn_id = %x  write.conn_id = %x", conn_id,p_data->search_res.conn_id,p_data->write.conn_id);
+        LOG_INFO("WRITE CHAR: open.conn_id = %x search_res.conn_id = %x  write.conn_id = %x", conn_id, p_data->search_res.conn_id, p_data->write.conn_id);
         LOG_INFO("WRITE CHAR: write.status = %x inst_id = %x", p_data->write.status, char_id->inst_id);
-        if (p_data->write.status==0) {
-			if (char_id->uuid.len == ESP_UUID_LEN_16) {
-				LOG_INFO("Char UUID16: %x", char_id->uuid.uuid.uuid16);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_32) {
-				LOG_INFO("Char UUID32: %x", char_id->uuid.uuid.uuid32);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_128) {
-				LOG_INFO("Char UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
-						 char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
-						 char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
-						 char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
-						 char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
-						 char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
-			} else {
-				LOG_ERROR("Char UNKNOWN LEN %d", char_id->uuid.len);
-			}
-			if (srvc_id->id.uuid.len == ESP_UUID_LEN_16) {
-				LOG_INFO("Decr UUID16: %x", srvc_id->id.uuid.uuid.uuid16);
-			} else if (srvc_id->id.uuid.len == ESP_UUID_LEN_32) {
-				LOG_INFO("Decr UUID32: %x", srvc_id->id.uuid.uuid.uuid32);
-			} else if (srvc_id->id.uuid.len == ESP_UUID_LEN_128) {
-				LOG_INFO("Decr UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", srvc_id->id.uuid.uuid.uuid128[0],
-						 srvc_id->id.uuid.uuid.uuid128[1], srvc_id->id.uuid.uuid.uuid128[2], srvc_id->id.uuid.uuid.uuid128[3],
-						 srvc_id->id.uuid.uuid.uuid128[4], srvc_id->id.uuid.uuid.uuid128[5], srvc_id->id.uuid.uuid.uuid128[6],
-						 srvc_id->id.uuid.uuid.uuid128[7], srvc_id->id.uuid.uuid.uuid128[8], srvc_id->id.uuid.uuid.uuid128[9],
-						 srvc_id->id.uuid.uuid.uuid128[10], srvc_id->id.uuid.uuid.uuid128[11], srvc_id->id.uuid.uuid.uuid128[12],
-						 srvc_id->id.uuid.uuid.uuid128[13], srvc_id->id.uuid.uuid.uuid128[14], srvc_id->id.uuid.uuid.uuid128[15]);
-			} else {
-				LOG_ERROR("Decr UNKNOWN LEN %d", srvc_id->id.uuid.len);
-			}
-            //written=true;
-            if(written==false){
-                esp_ble_gattc_register_for_notify(gattc_if,server_dba,&nrf51_service_id,&nrf51_char_id);
-                //esp_ble_gattc_close(gattc_if, client_conn);
+        if (p_data->write.status == 0)
+        {
+            if (char_id->uuid.len == ESP_UUID_LEN_16)
+            {
+                LOG_INFO("Char UUID16: %x", char_id->uuid.uuid.uuid16);
             }
-            
-            
+            else if (char_id->uuid.len == ESP_UUID_LEN_32)
+            {
+                LOG_INFO("Char UUID32: %x", char_id->uuid.uuid.uuid32);
+            }
+            else if (char_id->uuid.len == ESP_UUID_LEN_128)
+            {
+                LOG_INFO("Char UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
+                         char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
+                         char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
+                         char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
+                         char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
+                         char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
+            }
+            else
+            {
+                LOG_ERROR("Char UNKNOWN LEN %d", char_id->uuid.len);
+            }
+            if (srvc_id->id.uuid.len == ESP_UUID_LEN_16)
+            {
+                LOG_INFO("Decr UUID16: %x", srvc_id->id.uuid.uuid.uuid16);
+            }
+            else if (srvc_id->id.uuid.len == ESP_UUID_LEN_32)
+            {
+                LOG_INFO("Decr UUID32: %x", srvc_id->id.uuid.uuid.uuid32);
+            }
+            else if (srvc_id->id.uuid.len == ESP_UUID_LEN_128)
+            {
+                LOG_INFO("Decr UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", srvc_id->id.uuid.uuid.uuid128[0],
+                         srvc_id->id.uuid.uuid.uuid128[1], srvc_id->id.uuid.uuid.uuid128[2], srvc_id->id.uuid.uuid.uuid128[3],
+                         srvc_id->id.uuid.uuid.uuid128[4], srvc_id->id.uuid.uuid.uuid128[5], srvc_id->id.uuid.uuid.uuid128[6],
+                         srvc_id->id.uuid.uuid.uuid128[7], srvc_id->id.uuid.uuid.uuid128[8], srvc_id->id.uuid.uuid.uuid128[9],
+                         srvc_id->id.uuid.uuid.uuid128[10], srvc_id->id.uuid.uuid.uuid128[11], srvc_id->id.uuid.uuid.uuid128[12],
+                         srvc_id->id.uuid.uuid.uuid128[13], srvc_id->id.uuid.uuid.uuid128[14], srvc_id->id.uuid.uuid.uuid128[15]);
+            }
+            else
+            {
+                LOG_ERROR("Decr UNKNOWN LEN %d", srvc_id->id.uuid.len);
+            }
+            //written=true;
+            if (notify_flag == false)
+            {
+                if (written == 0)
+                {
+                    esp_ble_gattc_register_for_notify(gattc_if, server_dba, &nrf51_service_id, &nrf51_char_id);
+                    //esp_ble_gattc_close(gattc_if, client_conn);
+                }
+                else
+                {
+                    if (written == 1)
+                    {
+                        // wait for time to be set
+                        time_t now;
+                        time(&now);
+                        localtime_r(&now, &timeinfo);
+                        // Is time set? If not, tm_year will be (1970 - 1900).
+                        int retry = 0;
+                        const int retry_count = 10;
+                        while (timeinfo.tm_year < (2017 - 1900) && ++retry < retry_count)
+                        {
+                            ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
+                            vTaskDelay(2000 / portTICK_PERIOD_MS);
+                            time(&now);
+                            localtime_r(&now, &timeinfo);
+                        }
+                        char strftime_buf[64];
+
+                        // Set timezone to China Standard Time
+                        setenv("TZ", "GMT-8", 1);
+                        tzset();
+                        localtime_r(&now, &timeinfo);
+                        strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+                        ESP_LOGI(TAG, "The current date/time in Shanghai is: %s", strftime_buf);
+                        uint8_t value[6];
+                        value[0] = 0x01;
+                        value[1] = 0x02;
+                        value[2] = 0x00;
+                        value[3] = timeinfo.tm_hour;
+                        value[4] = timeinfo.tm_min;
+                        value[5] = timeinfo.tm_sec;
+                        written++;
+                        esp_ble_gattc_write_char(client_if, client_conn, &nrf51_service_id, &nrf51_char_id, sizeof(value), value, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+                    }
+                    else if (written == 2)
+                    {
+                        uint16_t year = timeinfo.tm_year+1900;
+                        uint8_t value[6];
+                        value[0] = 0x01;
+                        value[1] = 0x03;
+                        value[2] = (year << 8) >> 8;
+                        value[3] = year >> 8;
+                        value[4] = timeinfo.tm_mon + 1;
+                        value[5] = timeinfo.tm_mday;
+                        written = 0;
+                        esp_ble_gattc_write_char(client_if, client_conn, &nrf51_service_id, &nrf51_char_id, sizeof(value), value, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+                    }
+                }
+            }
         }
         break;
     }
-    case ESP_GATTC_SEARCH_RES_EVT: {
+    case ESP_GATTC_SEARCH_RES_EVT:
+    {
         esp_gatt_srvc_id_t *srvc_id = &p_data->search_res.srvc_id;
         conn_id = p_data->open.conn_id;
-        LOG_INFO("SEARCH RES: open.conn_id = %x search_res.conn_id = %x", conn_id,p_data->search_res.conn_id);
-        if (srvc_id->id.uuid.len == ESP_UUID_LEN_16) {
+        LOG_INFO("SEARCH RES: open.conn_id = %x search_res.conn_id = %x", conn_id, p_data->search_res.conn_id);
+        if (srvc_id->id.uuid.len == ESP_UUID_LEN_16)
+        {
             LOG_INFO("UUID16: %x", srvc_id->id.uuid.uuid.uuid16);
-        } else if (srvc_id->id.uuid.len == ESP_UUID_LEN_32) {
+        }
+        else if (srvc_id->id.uuid.len == ESP_UUID_LEN_32)
+        {
             LOG_INFO("UUID32: %x", srvc_id->id.uuid.uuid.uuid32);
-        } else if (srvc_id->id.uuid.len == ESP_UUID_LEN_128) {
+        }
+        else if (srvc_id->id.uuid.len == ESP_UUID_LEN_128)
+        {
             LOG_INFO("UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", srvc_id->id.uuid.uuid.uuid128[0],
                      srvc_id->id.uuid.uuid.uuid128[1], srvc_id->id.uuid.uuid.uuid128[2], srvc_id->id.uuid.uuid.uuid128[3],
                      srvc_id->id.uuid.uuid.uuid128[4], srvc_id->id.uuid.uuid.uuid128[5], srvc_id->id.uuid.uuid.uuid128[6],
                      srvc_id->id.uuid.uuid.uuid128[7], srvc_id->id.uuid.uuid.uuid128[8], srvc_id->id.uuid.uuid.uuid128[9],
                      srvc_id->id.uuid.uuid.uuid128[10], srvc_id->id.uuid.uuid.uuid128[11], srvc_id->id.uuid.uuid.uuid128[12],
                      srvc_id->id.uuid.uuid.uuid128[13], srvc_id->id.uuid.uuid.uuid128[14], srvc_id->id.uuid.uuid.uuid128[15]);
-            if(srvc_id->id.uuid.uuid.uuid128[12]==0x0)
-                esp_ble_gattc_get_characteristic(gattc_if,p_data->search_res.conn_id,srvc_id,NULL);
-        } else {
+            if (srvc_id->id.uuid.uuid.uuid128[12] == 0x0)
+                esp_ble_gattc_get_characteristic(gattc_if, p_data->search_res.conn_id, srvc_id, NULL);
+        }
+        else
+        {
             LOG_ERROR("UNKNOWN LEN %d", srvc_id->id.uuid.len);
         }
         break;
     }
-    case ESP_GATTC_WRITE_DESCR_EVT: {
-        uint8_t value[]={0x01,0x0a,0xaa,0xbb,0xcc,0xdd};
+    case ESP_GATTC_WRITE_DESCR_EVT:
+    {
+        uint8_t value[] = {0x01, 0x0a, 0xaa, 0xbb, 0xcc, 0xdd};
         esp_gatt_srvc_id_t *srvc_id = &p_data->write.srvc_id;
         esp_gatt_id_t *char_id = &p_data->write.char_id;
         esp_gatt_id_t *descr_id = &p_data->write.descr_id;
         conn_id = p_data->write.conn_id;
-        LOG_INFO("WRITE DESCR: open.conn_id = %x search_res.conn_id = %x  write.conn_id = %x", conn_id,p_data->search_res.conn_id,p_data->write.conn_id);
-        LOG_INFO("WRITE DESCR: write.status = %x inst_id = %x open.gatt_if = %x", p_data->write.status, char_id->inst_id,gattc_if);
-        if (p_data->write.status==0) {
-			if (char_id->uuid.len == ESP_UUID_LEN_16) {
-				LOG_INFO("Char UUID16: %x", char_id->uuid.uuid.uuid16);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_32) {
-				LOG_INFO("Char UUID32: %x", char_id->uuid.uuid.uuid32);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_128) {
-				LOG_INFO("Char UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
-						 char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
-						 char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
-						 char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
-						 char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
-						 char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
-			} else {
-				LOG_ERROR("Char UNKNOWN LEN %d", char_id->uuid.len);
-			}
-			if (descr_id->uuid.len == ESP_UUID_LEN_16) {
-				LOG_INFO("Decr UUID16: %x", descr_id->uuid.uuid.uuid16);
-			} else if (descr_id->uuid.len == ESP_UUID_LEN_32) {
-				LOG_INFO("Decr UUID32: %x", descr_id->uuid.uuid.uuid32);
-			} else if (descr_id->uuid.len == ESP_UUID_LEN_128) {
-				LOG_INFO("Decr UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", descr_id->uuid.uuid.uuid128[0],
-						 descr_id->uuid.uuid.uuid128[1], descr_id->uuid.uuid.uuid128[2], descr_id->uuid.uuid.uuid128[3],
-						 descr_id->uuid.uuid.uuid128[4], descr_id->uuid.uuid.uuid128[5], descr_id->uuid.uuid.uuid128[6],
-						 descr_id->uuid.uuid.uuid128[7], descr_id->uuid.uuid.uuid128[8], descr_id->uuid.uuid.uuid128[9],
-						 descr_id->uuid.uuid.uuid128[10], descr_id->uuid.uuid.uuid128[11], descr_id->uuid.uuid.uuid128[12],
-						 descr_id->uuid.uuid.uuid128[13], descr_id->uuid.uuid.uuid128[14], descr_id->uuid.uuid.uuid128[15]);
-			} else {
-				LOG_ERROR("Decr UNKNOWN LEN %d", descr_id->uuid.len);
-			}
-			if (srvc_id->id.uuid.len == ESP_UUID_LEN_16) {
-				LOG_INFO("SRVC UUID16: %x", srvc_id->id.uuid.uuid.uuid16);
-			} else if (srvc_id->id.uuid.len == ESP_UUID_LEN_32) {
-				LOG_INFO("SRVC UUID32: %x", srvc_id->id.uuid.uuid.uuid32);
-			} else if (srvc_id->id.uuid.len == ESP_UUID_LEN_128) {
-				LOG_INFO("SRVC UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", srvc_id->id.uuid.uuid.uuid128[0],
-						 srvc_id->id.uuid.uuid.uuid128[1], srvc_id->id.uuid.uuid.uuid128[2], srvc_id->id.uuid.uuid.uuid128[3],
-						 srvc_id->id.uuid.uuid.uuid128[4], srvc_id->id.uuid.uuid.uuid128[5], srvc_id->id.uuid.uuid.uuid128[6],
-						 srvc_id->id.uuid.uuid.uuid128[7], srvc_id->id.uuid.uuid.uuid128[8], srvc_id->id.uuid.uuid.uuid128[9],
-						 srvc_id->id.uuid.uuid.uuid128[10], srvc_id->id.uuid.uuid.uuid128[11], srvc_id->id.uuid.uuid.uuid128[12],
-						 srvc_id->id.uuid.uuid.uuid128[13], srvc_id->id.uuid.uuid.uuid128[14], srvc_id->id.uuid.uuid.uuid128[15]);
-			} else {
-				LOG_ERROR("SRVC UNKNOWN LEN %d", srvc_id->id.uuid.len);
-			}
-	        LOG_INFO("WRITE DESCR: gattc_if = %x",gattc_if);
-            LOG_INFO("remote_bda %x,%x,%x,%x,%x,%x:",p_data->open.remote_bda[0],
-            		p_data->open.remote_bda[1],p_data->open.remote_bda[2],
-					p_data->open.remote_bda[3],p_data->open.remote_bda[4],
-					p_data->open.remote_bda[5]);
-            LOG_INFO("server_dba %x,%x,%x,%x,%x,%x:",server_dba[0],
-            		server_dba[1],server_dba[2],
-					server_dba[3],server_dba[4],
-					server_dba[5]);
-			//esp_ble_gattc_register_for_notify(gattc_if,server_dba,srvc_id,char_id);
+        LOG_INFO("WRITE DESCR: open.conn_id = %x search_res.conn_id = %x  write.conn_id = %x", conn_id, p_data->search_res.conn_id, p_data->write.conn_id);
+        LOG_INFO("WRITE DESCR: write.status = %x inst_id = %x open.gatt_if = %x", p_data->write.status, char_id->inst_id, gattc_if);
+        if (p_data->write.status == 0)
+        {
+            if (char_id->uuid.len == ESP_UUID_LEN_16)
+            {
+                LOG_INFO("Char UUID16: %x", char_id->uuid.uuid.uuid16);
+            }
+            else if (char_id->uuid.len == ESP_UUID_LEN_32)
+            {
+                LOG_INFO("Char UUID32: %x", char_id->uuid.uuid.uuid32);
+            }
+            else if (char_id->uuid.len == ESP_UUID_LEN_128)
+            {
+                LOG_INFO("Char UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
+                         char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
+                         char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
+                         char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
+                         char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
+                         char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
+            }
+            else
+            {
+                LOG_ERROR("Char UNKNOWN LEN %d", char_id->uuid.len);
+            }
+            if (descr_id->uuid.len == ESP_UUID_LEN_16)
+            {
+                LOG_INFO("Decr UUID16: %x", descr_id->uuid.uuid.uuid16);
+            }
+            else if (descr_id->uuid.len == ESP_UUID_LEN_32)
+            {
+                LOG_INFO("Decr UUID32: %x", descr_id->uuid.uuid.uuid32);
+            }
+            else if (descr_id->uuid.len == ESP_UUID_LEN_128)
+            {
+                LOG_INFO("Decr UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", descr_id->uuid.uuid.uuid128[0],
+                         descr_id->uuid.uuid.uuid128[1], descr_id->uuid.uuid.uuid128[2], descr_id->uuid.uuid.uuid128[3],
+                         descr_id->uuid.uuid.uuid128[4], descr_id->uuid.uuid.uuid128[5], descr_id->uuid.uuid.uuid128[6],
+                         descr_id->uuid.uuid.uuid128[7], descr_id->uuid.uuid.uuid128[8], descr_id->uuid.uuid.uuid128[9],
+                         descr_id->uuid.uuid.uuid128[10], descr_id->uuid.uuid.uuid128[11], descr_id->uuid.uuid.uuid128[12],
+                         descr_id->uuid.uuid.uuid128[13], descr_id->uuid.uuid.uuid128[14], descr_id->uuid.uuid.uuid128[15]);
+            }
+            else
+            {
+                LOG_ERROR("Decr UNKNOWN LEN %d", descr_id->uuid.len);
+            }
+            if (srvc_id->id.uuid.len == ESP_UUID_LEN_16)
+            {
+                LOG_INFO("SRVC UUID16: %x", srvc_id->id.uuid.uuid.uuid16);
+            }
+            else if (srvc_id->id.uuid.len == ESP_UUID_LEN_32)
+            {
+                LOG_INFO("SRVC UUID32: %x", srvc_id->id.uuid.uuid.uuid32);
+            }
+            else if (srvc_id->id.uuid.len == ESP_UUID_LEN_128)
+            {
+                LOG_INFO("SRVC UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", srvc_id->id.uuid.uuid.uuid128[0],
+                         srvc_id->id.uuid.uuid.uuid128[1], srvc_id->id.uuid.uuid.uuid128[2], srvc_id->id.uuid.uuid.uuid128[3],
+                         srvc_id->id.uuid.uuid.uuid128[4], srvc_id->id.uuid.uuid.uuid128[5], srvc_id->id.uuid.uuid.uuid128[6],
+                         srvc_id->id.uuid.uuid.uuid128[7], srvc_id->id.uuid.uuid.uuid128[8], srvc_id->id.uuid.uuid.uuid128[9],
+                         srvc_id->id.uuid.uuid.uuid128[10], srvc_id->id.uuid.uuid.uuid128[11], srvc_id->id.uuid.uuid.uuid128[12],
+                         srvc_id->id.uuid.uuid.uuid128[13], srvc_id->id.uuid.uuid.uuid128[14], srvc_id->id.uuid.uuid.uuid128[15]);
+            }
+            else
+            {
+                LOG_ERROR("SRVC UNKNOWN LEN %d", srvc_id->id.uuid.len);
+            }
+            LOG_INFO("WRITE DESCR: gattc_if = %x", gattc_if);
+            LOG_INFO("remote_bda %x,%x,%x,%x,%x,%x:", p_data->open.remote_bda[0],
+                     p_data->open.remote_bda[1], p_data->open.remote_bda[2],
+                     p_data->open.remote_bda[3], p_data->open.remote_bda[4],
+                     p_data->open.remote_bda[5]);
+            LOG_INFO("server_dba %x,%x,%x,%x,%x,%x:", server_dba[0],
+                     server_dba[1], server_dba[2],
+                     server_dba[3], server_dba[4],
+                     server_dba[5]);
+            //esp_ble_gattc_register_for_notify(gattc_if,server_dba,srvc_id,char_id);
             //esp_ble_gattc_close(gattc_if, conn_id);
-//esp_ble_gattc_write_char(client_if, client_conn, &nrf51_service_id, &nrf51_char_id, sizeof(value), value, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
-
+            //esp_ble_gattc_write_char(client_if, client_conn, &nrf51_service_id, &nrf51_char_id, sizeof(value), value, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
         }
         break;
     }
-    case ESP_GATTC_NOTIFY_EVT: {
+    case ESP_GATTC_NOTIFY_EVT:
+    {
         // esp_gatt_srvc_id_t *srvc_id = &p_data->read.srvc_id;
         esp_gatt_id_t *char_id = &p_data->notify.char_id;
         conn_id = p_data->open.conn_id;
-        LOG_INFO("NOTIFY: open.conn_id = %x search_res.conn_id = %x  notify.conn_id = %x", conn_id,p_data->search_res.conn_id,p_data->notify.conn_id);
+        LOG_INFO("NOTIFY: open.conn_id = %x search_res.conn_id = %x  notify.conn_id = %x", conn_id, p_data->search_res.conn_id, p_data->notify.conn_id);
         LOG_INFO("NOTIFY: notify.is_notify = %x inst_id = %x", p_data->notify.is_notify, char_id->inst_id);
-        if (p_data->notify.is_notify==1) {
-			if (char_id->uuid.len == ESP_UUID_LEN_16) {
-				LOG_INFO("Char UUID16: %x", char_id->uuid.uuid.uuid16);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_32) {
-				LOG_INFO("Char UUID32: %x", char_id->uuid.uuid.uuid32);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_128) {
-				LOG_INFO("Char UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
-						 char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
-						 char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
-						 char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
-						 char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
-						 char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
-			} else {
-				LOG_ERROR("Char UNKNOWN LEN %d\n", char_id->uuid.len);
-			}
+        if (p_data->notify.is_notify == 1)
+        {
+            if (char_id->uuid.len == ESP_UUID_LEN_16)
+            {
+                LOG_INFO("Char UUID16: %x", char_id->uuid.uuid.uuid16);
+            }
+            else if (char_id->uuid.len == ESP_UUID_LEN_32)
+            {
+                LOG_INFO("Char UUID32: %x", char_id->uuid.uuid.uuid32);
+            }
+            else if (char_id->uuid.len == ESP_UUID_LEN_128)
+            {
+                LOG_INFO("Char UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
+                         char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
+                         char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
+                         char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
+                         char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
+                         char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
+            }
+            else
+            {
+                LOG_ERROR("Char UNKNOWN LEN %d\n", char_id->uuid.len);
+            }
             char notify_value[2];
-            for (int i = 0; i < p_data->notify.value_len; i++) {
+            for (int i = 0; i < p_data->notify.value_len; i++)
+            {
                 LOG_INFO("NOTIFY: V%d %02x:", i, p_data->notify.value[i]);
                 sprintf(notify_value, "%02x", p_data->notify.value[i]);
-                strcat(get_request,notify_value);
+                strcat(get_request, notify_value);
             }
-            
-            if(p_data->notify.value[0]==0xaa &&p_data->notify.value[1]==0xaa &&p_data->notify.value[2]==0x55 &&p_data->notify.value[3]==0x55){
+
+            if (p_data->notify.value[0] == 0xaa && p_data->notify.value[1] == 0xaa && p_data->notify.value[2] == 0x55 && p_data->notify.value[3] == 0x55)
+            {
                 esp_ble_gattc_close(client_if, client_conn);
-                strcat(get_request,get_request_end);
+                strcat(get_request, get_request_end);
                 xTaskCreate(&http_get_task, "http_get_task", 2048, NULL, 5, NULL);
             }
         }
         break;
     }
-    case ESP_GATTC_GET_CHAR_EVT: {
+    case ESP_GATTC_GET_CHAR_EVT:
+    {
         esp_gatt_srvc_id_t *srvc_id = &p_data->get_char.srvc_id;
         esp_gatt_id_t *char_id = &p_data->get_char.char_id;
         conn_id = p_data->open.conn_id;
-        uint8_t value[]={0x01,0x0a,0xaa,0xbb,0xcc,0xdd};
-        
-        LOG_INFO("GET CHAR: open.conn_id = %x search_res.conn_id = %x  get_char.conn_id = %x", conn_id,p_data->search_res.conn_id,p_data->get_char.conn_id);
-        LOG_INFO("GET CHAR: get_char.char_prop = %x get_char.status = %x inst_id = %x open.gatt_if = %x", p_data->get_char.char_prop, p_data->get_char.status, char_id->inst_id,gattc_if);
-        LOG_INFO("remote_bda %x,%x,%x,%x,%x,%x:",p_data->open.remote_bda[0],
-        		p_data->open.remote_bda[1],p_data->open.remote_bda[2],
-				p_data->open.remote_bda[3],p_data->open.remote_bda[4],
-				p_data->open.remote_bda[5]);
-        if (p_data->get_char.status==0) {
-			if (char_id->uuid.len == ESP_UUID_LEN_16) {
-				LOG_INFO("UUID16: %x", char_id->uuid.uuid.uuid16);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_32) {
-				LOG_INFO("UUID32: %x", char_id->uuid.uuid.uuid32);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_128) {
-				LOG_INFO("UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
-						 char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
-						 char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
-						 char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
-						 char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
-						 char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
-                if(char_id->uuid.uuid.uuid128[12]==0x1){
-                    LOG_INFO("value: %p %p %d %d", value,&value[5],client_if, client_conn);
+        uint8_t value[] = {0x01, 0x0a, 0xaa, 0xbb, 0xcc, 0xdd};
+
+        LOG_INFO("GET CHAR: open.conn_id = %x search_res.conn_id = %x  get_char.conn_id = %x", conn_id, p_data->search_res.conn_id, p_data->get_char.conn_id);
+        LOG_INFO("GET CHAR: get_char.char_prop = %x get_char.status = %x inst_id = %x open.gatt_if = %x", p_data->get_char.char_prop, p_data->get_char.status, char_id->inst_id, gattc_if);
+        LOG_INFO("remote_bda %x,%x,%x,%x,%x,%x:", p_data->open.remote_bda[0],
+                 p_data->open.remote_bda[1], p_data->open.remote_bda[2],
+                 p_data->open.remote_bda[3], p_data->open.remote_bda[4],
+                 p_data->open.remote_bda[5]);
+        if (p_data->get_char.status == 0)
+        {
+            if (char_id->uuid.len == ESP_UUID_LEN_16)
+            {
+                LOG_INFO("UUID16: %x", char_id->uuid.uuid.uuid16);
+            }
+            else if (char_id->uuid.len == ESP_UUID_LEN_32)
+            {
+                LOG_INFO("UUID32: %x", char_id->uuid.uuid.uuid32);
+            }
+            else if (char_id->uuid.len == ESP_UUID_LEN_128)
+            {
+                LOG_INFO("UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
+                         char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
+                         char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
+                         char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
+                         char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
+                         char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
+                if (char_id->uuid.uuid.uuid128[12] == 0x1)
+                {
+                    LOG_INFO("value: %p %p %d %d", value, &value[5], client_if, client_conn);
                     //esp_ble_gattc_get_descriptor(gattc_if,conn_id,srvc_id,char_id,NULL);
                     //esp_ble_gattc_write_char_descr (gattc_if,conn_id,srvc_id,char_id,descr_id,2,&value[0],ESP_GATT_WRITE_TYPE_NO_RSP,ESP_GATT_AUTH_REQ_NONE);
                     //esp_ble_gattc_read_char(gattc_if,conn_id,srvc_id,char_id,ESP_GATT_AUTH_REQ_NONE);
                     //esp_ble_gattc_write_char(gattc_if, conn_id, srvc_id, char_id, 6, &value[0], ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
                     //esp_ble_gattc_write_char(client_if, client_conn, &nrf51_service_id, &nrf51_char_id, sizeof(value), value, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
-                    //esp_ble_gattc_register_for_notify(gattc_if,server_dba,srvc_id,char_id);    
-				//if (p_data->get_char.char_prop==18) {
-					esp_ble_gattc_get_descriptor(gattc_if,conn_id,srvc_id,char_id,NULL);
-				} else {
-					esp_ble_gattc_get_characteristic(gattc_if,conn_id,srvc_id,char_id);
-				}
-			} else {
-				LOG_ERROR("UNKNOWN LEN %d", char_id->uuid.len);
-			}
+                    //esp_ble_gattc_register_for_notify(gattc_if,server_dba,srvc_id,char_id);
+                    //if (p_data->get_char.char_prop==18) {
+                    esp_ble_gattc_get_descriptor(gattc_if, conn_id, srvc_id, char_id, NULL);
+                }
+                else
+                {
+                    esp_ble_gattc_get_characteristic(gattc_if, conn_id, srvc_id, char_id);
+                }
+            }
+            else
+            {
+                LOG_ERROR("UNKNOWN LEN %d", char_id->uuid.len);
+            }
         }
         break;
     }
-      
-    case ESP_GATTC_GET_DESCR_EVT: {
+
+    case ESP_GATTC_GET_DESCR_EVT:
+    {
         esp_gatt_srvc_id_t *srvc_id = &p_data->get_descr.srvc_id;
         esp_gatt_id_t *char_id = &p_data->get_descr.char_id;
         esp_gatt_id_t *descr_id = &p_data->get_descr.descr_id;
         conn_id = p_data->open.conn_id;
-        LOG_INFO("GET DESCR: open.conn_id = %x search_res.conn_id = %x  get_descr.conn_id = %x", conn_id,p_data->search_res.conn_id,p_data->get_descr.conn_id);
-        LOG_INFO("GET DESCR: get_descr.status = %x inst_id = %x open.gatt_if = %x", p_data->get_descr.status, char_id->inst_id,gattc_if);
+        LOG_INFO("GET DESCR: open.conn_id = %x search_res.conn_id = %x  get_descr.conn_id = %x", conn_id, p_data->search_res.conn_id, p_data->get_descr.conn_id);
+        LOG_INFO("GET DESCR: get_descr.status = %x inst_id = %x open.gatt_if = %x", p_data->get_descr.status, char_id->inst_id, gattc_if);
         //uint8_t value[]={'a','b','c'};
-        uint8_t value[]={0x01,0x0a,0xaa,0xbb,0xcc,0xdd};
-        if (p_data->get_descr.status==0) {
-			if (char_id->uuid.len == ESP_UUID_LEN_16) {
-				LOG_INFO("Char UUID16: %x", char_id->uuid.uuid.uuid16);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_32) {
-				LOG_INFO("Char UUID32: %x", char_id->uuid.uuid.uuid32);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_128) {
-				LOG_INFO("Char UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
-						 char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
-						 char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
-						 char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
-						 char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
-						 char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
-			} else {
-				LOG_ERROR("Char UNKNOWN LEN %d", char_id->uuid.len);
-			}
-			if (descr_id->uuid.len == ESP_UUID_LEN_16) {
-				LOG_INFO("Decr UUID16: %x", descr_id->uuid.uuid.uuid16);
-			} else if (descr_id->uuid.len == ESP_UUID_LEN_32) {
-				LOG_INFO("Decr UUID32: %x", descr_id->uuid.uuid.uuid32);
-			} else if (descr_id->uuid.len == ESP_UUID_LEN_128) {
-				LOG_INFO("Decr UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", descr_id->uuid.uuid.uuid128[0],
-						 descr_id->uuid.uuid.uuid128[1], descr_id->uuid.uuid.uuid128[2], descr_id->uuid.uuid.uuid128[3],
-						 descr_id->uuid.uuid.uuid128[4], descr_id->uuid.uuid.uuid128[5], descr_id->uuid.uuid.uuid128[6],
-						 descr_id->uuid.uuid.uuid128[7], descr_id->uuid.uuid.uuid128[8], descr_id->uuid.uuid.uuid128[9],
-						 descr_id->uuid.uuid.uuid128[10], descr_id->uuid.uuid.uuid128[11], descr_id->uuid.uuid.uuid128[12],
-						 descr_id->uuid.uuid.uuid128[13], descr_id->uuid.uuid.uuid128[14], descr_id->uuid.uuid.uuid128[15]);
-			} else {
-				LOG_ERROR("Decr UNKNOWN LEN %d", descr_id->uuid.len);
-			}
+        uint8_t value[] = {0x01, 0x0a, 0xaa, 0xbb, 0xcc, 0xdd};
+        if (p_data->get_descr.status == 0)
+        {
+            if (char_id->uuid.len == ESP_UUID_LEN_16)
+            {
+                LOG_INFO("Char UUID16: %x", char_id->uuid.uuid.uuid16);
+            }
+            else if (char_id->uuid.len == ESP_UUID_LEN_32)
+            {
+                LOG_INFO("Char UUID32: %x", char_id->uuid.uuid.uuid32);
+            }
+            else if (char_id->uuid.len == ESP_UUID_LEN_128)
+            {
+                LOG_INFO("Char UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
+                         char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
+                         char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
+                         char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
+                         char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
+                         char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
+            }
+            else
+            {
+                LOG_ERROR("Char UNKNOWN LEN %d", char_id->uuid.len);
+            }
+            if (descr_id->uuid.len == ESP_UUID_LEN_16)
+            {
+                LOG_INFO("Decr UUID16: %x", descr_id->uuid.uuid.uuid16);
+            }
+            else if (descr_id->uuid.len == ESP_UUID_LEN_32)
+            {
+                LOG_INFO("Decr UUID32: %x", descr_id->uuid.uuid.uuid32);
+            }
+            else if (descr_id->uuid.len == ESP_UUID_LEN_128)
+            {
+                LOG_INFO("Decr UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", descr_id->uuid.uuid.uuid128[0],
+                         descr_id->uuid.uuid.uuid128[1], descr_id->uuid.uuid.uuid128[2], descr_id->uuid.uuid.uuid128[3],
+                         descr_id->uuid.uuid.uuid128[4], descr_id->uuid.uuid.uuid128[5], descr_id->uuid.uuid.uuid128[6],
+                         descr_id->uuid.uuid.uuid128[7], descr_id->uuid.uuid.uuid128[8], descr_id->uuid.uuid.uuid128[9],
+                         descr_id->uuid.uuid.uuid128[10], descr_id->uuid.uuid.uuid128[11], descr_id->uuid.uuid.uuid128[12],
+                         descr_id->uuid.uuid.uuid128[13], descr_id->uuid.uuid.uuid128[14], descr_id->uuid.uuid.uuid128[15]);
+            }
+            else
+            {
+                LOG_ERROR("Decr UNKNOWN LEN %d", descr_id->uuid.len);
+            }
             LOG_INFO("sizeof value: %d", sizeof(value));
-			//esp_ble_gattc_write_char_descr (gattc_if,conn_id,srvc_id,char_id,descr_id,4,&value[0],ESP_GATT_WRITE_TYPE_RSP,ESP_GATT_AUTH_REQ_NONE);
+            //esp_ble_gattc_write_char_descr (gattc_if,conn_id,srvc_id,char_id,descr_id,4,&value[0],ESP_GATT_WRITE_TYPE_RSP,ESP_GATT_AUTH_REQ_NONE);
             //esp_ble_gattc_write_char_descr (client_if, client_conn, &nrf51_service_id, &nrf51_char_id,descr_id,sizeof(value),value,ESP_GATT_WRITE_TYPE_RSP,ESP_GATT_AUTH_REQ_NONE);
-            esp_ble_gattc_write_char(client_if, client_conn, &nrf51_service_id, &nrf51_char_id, sizeof(value), value, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+            esp_gatt_srvc_id_t ba_service_id = {
+                .id = {
+                    .uuid = {
+                        .len = ESP_UUID_LEN_16,
+                        .uuid = {
+                            .uuid16 = 0x180f,
+                        },
+                    },
+                    .inst_id = 0,
+                },
+                .is_primary = true,
+            };
+
+            esp_gatt_id_t ba_char_id = {
+                .uuid = {
+                    .len = ESP_UUID_LEN_16,
+                    .uuid = {
+                        .uuid16 = 0x2a19,
+                    },
+                },
+                .inst_id = 0,
+            };
+            //esp_gatt_id_t *char_id = &(0x2a19);
+            esp_ble_gattc_read_char(client_if, client_conn, &ba_service_id, &ba_char_id, ESP_GATT_AUTH_REQ_NONE);
+
+            //esp_ble_gattc_write_char(client_if, client_conn, &nrf51_service_id, &nrf51_char_id, sizeof(value), value, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
         }
         break;
     }
-    case ESP_GATTC_REG_FOR_NOTIFY_EVT: {
-        uint8_t value[]={0x01,0x06};
+    case ESP_GATTC_REG_FOR_NOTIFY_EVT:
+    {
+        uint8_t value[] = {0x01, 0x06};
         LOG_INFO("NOTIFY_EVT: open.conn_id = %x ", p_data->open.conn_id);
         LOG_INFO("NOTIFY_EVT: reg_for_notify.status = %x ", p_data->reg_for_notify.status);
         esp_gatt_srvc_id_t *srvc_id = &p_data->reg_for_notify.srvc_id;
         esp_gatt_id_t *char_id = &p_data->reg_for_notify.char_id;
-        if (p_data->reg_for_notify.status==0) {
-			if (char_id->uuid.len == ESP_UUID_LEN_16) {
-				LOG_INFO("UUID16: %x", char_id->uuid.uuid.uuid16);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_32) {
-				LOG_INFO("UUID32: %x", char_id->uuid.uuid.uuid32);
-			} else if (char_id->uuid.len == ESP_UUID_LEN_128) {
-				LOG_INFO("UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
-						 char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
-						 char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
-						 char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
-						 char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
-						 char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
-			} else {
-				LOG_ERROR("UNKNOWN LEN %d", char_id->uuid.len);
-			}
-            written=true;
-            esp_ble_gattc_write_char(client_if, client_conn, &nrf51_service_id, &nrf51_char_id,sizeof(value), value, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+        if (p_data->reg_for_notify.status == 0)
+        {
+            if (char_id->uuid.len == ESP_UUID_LEN_16)
+            {
+                LOG_INFO("UUID16: %x", char_id->uuid.uuid.uuid16);
+            }
+            else if (char_id->uuid.len == ESP_UUID_LEN_32)
+            {
+                LOG_INFO("UUID32: %x", char_id->uuid.uuid.uuid32);
+            }
+            else if (char_id->uuid.len == ESP_UUID_LEN_128)
+            {
+                LOG_INFO("UUID128: %x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x,%x", char_id->uuid.uuid.uuid128[0],
+                         char_id->uuid.uuid.uuid128[1], char_id->uuid.uuid.uuid128[2], char_id->uuid.uuid.uuid128[3],
+                         char_id->uuid.uuid.uuid128[4], char_id->uuid.uuid.uuid128[5], char_id->uuid.uuid.uuid128[6],
+                         char_id->uuid.uuid.uuid128[7], char_id->uuid.uuid.uuid128[8], char_id->uuid.uuid.uuid128[9],
+                         char_id->uuid.uuid.uuid128[10], char_id->uuid.uuid.uuid128[11], char_id->uuid.uuid.uuid128[12],
+                         char_id->uuid.uuid.uuid128[13], char_id->uuid.uuid.uuid128[14], char_id->uuid.uuid.uuid128[15]);
+            }
+            else
+            {
+                LOG_ERROR("UNKNOWN LEN %d", char_id->uuid.len);
+            }
+            notify_flag = true;
+            esp_ble_gattc_write_char(client_if, client_conn, &nrf51_service_id, &nrf51_char_id, sizeof(value), value, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
         }
         break;
     }
@@ -676,13 +874,15 @@ void ble_client_appRegister(void)
     LOG_INFO("register callback");
 
     //register the scan callback function to the Generic Access Profile (GAP) module
-    if ((status = esp_ble_gap_register_callback(esp_gap_cb)) != ESP_OK) {
+    if ((status = esp_ble_gap_register_callback(esp_gap_cb)) != ESP_OK)
+    {
         LOG_ERROR("gap register error, error code = %x", status);
         return;
     }
 
     //register the callback function to the Generic Attribute Profile (GATT) Client (GATTC) module
-    if ((status = esp_ble_gattc_register_callback(esp_gattc_cb)) != ESP_OK) {
+    if ((status = esp_ble_gattc_register_callback(esp_gattc_cb)) != ESP_OK)
+    {
         LOG_ERROR("gattc register error, error code = %x", status);
         return;
     }
@@ -702,39 +902,14 @@ void app_main()
     get_request = malloc(2057);
     strcpy(get_request, get_request_start);
 
-    ESP_ERROR_CHECK( nvs_flash_init() );
+    ESP_ERROR_CHECK(nvs_flash_init());
     initialise_wifi();
     xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
                         false, true, portMAX_DELAY);
     initialize_sntp();
-    // wait for time to be set
-    time_t now;
-    struct tm timeinfo;
-    time(&now);
-    localtime_r(&now, &timeinfo);
-    // Is time set? If not, tm_year will be (1970 - 1900).
-    int retry = 0;
-    const int retry_count = 10;
-    while(timeinfo.tm_year < (2017 - 1900) && ++retry < retry_count) {
-        ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
-        time(&now);
-        localtime_r(&now, &timeinfo);
-    }
-    char strftime_buf[64];
-    
-    // Set timezone to China Standard Time
-    setenv("TZ", "GMT-8", 1);
-    tzset();
-    localtime_r(&now, &timeinfo);
-    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-    ESP_LOGI(TAG, "The current date/time in Shanghai is: %s", strftime_buf);
-
-
-    esp_bt_controller_init();
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    esp_bt_controller_init(&bt_cfg);
     esp_bt_controller_enable(ESP_BT_MODE_BTDM);
-    
-   
+
     gattc_client_test();
 }
-
